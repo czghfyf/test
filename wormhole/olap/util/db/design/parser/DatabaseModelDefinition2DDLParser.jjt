@@ -1,0 +1,139 @@
+options {
+
+//	JDK_VERSION         = "1.5"; // why not use JDK 1.8 ?
+
+	STATIC              = false;
+
+	MULTI               = true;
+	NODE_USES_PARSER    = true;
+	VISITOR             = true;
+
+	JAVA_UNICODE_ESCAPE = true;
+	UNICODE_INPUT       = true;
+
+//	USER_TOKEN_MANAGER  = true; // default option is false
+
+}
+
+PARSER_BEGIN(DatabaseModelDefinition2DDLParser)
+
+package cn.bgotech.wormhole.olap.util.db.design.parser;
+
+import cn.bgotech.wormhole.olap.util.db.design.*;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+public class DatabaseModelDefinition2DDLParser {
+
+	private final Logger logger = LoggerFactory.getLogger(this.getClass());
+
+	private SQLGenerator sg = new SQLGenerator();
+
+}
+
+PARSER_END(DatabaseModelDefinition2DDLParser)
+
+/* white space */
+SKIP: {
+	  " "
+	| "\t"
+	| "\n"
+	| "\r"
+	| "\f"
+}
+
+SPECIAL_TOKEN: {
+  	< SINGLE_LINE_COMMENT : "--" ( ~[ "\n" , "\r" ] )* ( "\n" | "\r" | "\r\n" )? >
+}
+
+TOKEN [IGNORE_CASE]: {
+		< # DIGIT : [ "0"-"9" ] >
+	|   < # LETTER : [ "_", "a"-"z", "A"-"Z" ] >
+    |   < INT : ( <DIGIT> )+ >
+    |   < DB_TYPE_PREFIX : "[database:" >
+    // database name, table name, column name, data type
+    |   < DB_OBJ : <LETTER> ( <LETTER> | <DIGIT> )* >
+    |   < DEFAULT_VALUE : "[DEF:" ( ~[ "]" ] )+ "]" >
+    |   < ABSTRACT_TABLE_PREFIX : "[AT:" >
+    |   < TABLE_PREFIX : "[T:" >
+    |   < NO_NULL : "[nonull]" >
+    |   < UNIQUE : "[unique]" >
+    |   < PK : "[pk]" >
+    |   < FK_PREFIX : "[FK:" >
+    |   < DESC : "[DESC:" ( ~[ "]" ] )+ "]" >
+}
+
+/* parser entry */
+SQLGenerator parserEntry():
+{
+    Token tk;
+}
+{
+    <DB_TYPE_PREFIX> tk = <DB_OBJ> /* database type */
+        {
+            logger.debug("database type: " + tk.image.trim());
+            sg.setDatabaseType(tk.image.trim());
+        }
+    "]"
+    ( tableDefinition() )+
+    <EOF>
+    { return sg; }
+}
+
+void tableDefinition():
+{
+    TableObj table = new TableObj();
+    Token tk;
+}
+{
+    (   <ABSTRACT_TABLE_PREFIX> { logger.debug("abstract table:"); table.setAbstract(true); }
+      | <TABLE_PREFIX> { logger.debug("table:"); }
+    )
+        ( tk = <DB_OBJ> /* table name */ "-" { logger.debug("\t" + tk.image.trim());
+                            table.appendExtendTableBeforeCurrentTable(tk.image.trim()); } )*
+        "{" tk = <DB_OBJ> /* table name */ { logger.debug("\t" + "{" + tk.image.trim() + "}");
+                            table.setName(tk.image.trim()); } "}"
+        ( "-" tk = <DB_OBJ> /* table name */ { logger.debug("\t" + tk.image.trim());
+                            table.appendExtendTableAfterCurrentTable(tk.image.trim()); } )*
+    "]"
+
+    ( columnDefinition(table) )*
+    { sg.addTable(table); }
+}
+
+void columnDefinition(TableObj table):
+{
+    ColumnObj col;
+    Token tk;
+}
+{
+    tk = <DB_OBJ> /* column name */
+    { col = new ColumnObj(tk.image.trim()); logger.debug("\t\tcolumn name: " + tk.image.trim()); }
+    tk = <DB_OBJ> /* data type */
+    { col.setDataType(tk.image.trim()); logger.debug("\t\t\tdata type:" + tk.image.trim()); }
+    [ tk = <INT> { col.setDataTypeLength(Integer.parseInt(tk.image.trim())); logger.debug("\t\t\tlenght: " + tk.image.trim()); } ]
+
+    [ tk = <DEFAULT_VALUE>
+        { col.setDefaultValue(tk.image.trim().substring(5, tk.image.trim().length() - 1).trim()); logger.debug("\t\t\tdefault value: " + tk.image.trim()); }
+    ]
+
+    [ tk = <NO_NULL> { col.setNoNull(true); logger.debug("\t\t\tno null"); } ]
+    [ tk = <UNIQUE> { col.setUnique(true); logger.debug("\t\t\tunique"); } ]
+    [ tk = <PK> { col.setPKFlag(true); logger.debug("\t\t\tPK"); } ]
+    [
+        {
+            Token fkTable;
+        }
+        tk = <FK_PREFIX> fkTable = <DB_OBJ> /* pk table */ "."
+        (
+            ( "<pk>" | "<pK>" | "<Pk>" | "<PK>" ) { col.setFK(fkTable.image.trim(), "<PK>"); logger.debug("\t\t\tFK: " + fkTable.image.trim() + ".<PK>"); }
+          |
+            tk = <DB_OBJ> { col.setFK(fkTable.image.trim(), tk.image.trim()); logger.debug("\t\t\tFK: " + fkTable.image.trim() + "." + tk.image.trim()); }
+        )
+        "]"
+    ]
+    [ tk = <DESC> { col.setDesc(tk.image.trim().substring(6, tk.image.trim().length()).trim()); logger.debug("\t\t\t" + tk.image); } ]
+    { table.addColumn(col); }
+}
+

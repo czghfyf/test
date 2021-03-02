@@ -1,0 +1,120 @@
+options {
+
+//	JDK_VERSION         = "1.5"; // why not use JDK 1.8 ?
+
+	STATIC              = false;
+
+	MULTI               = true;
+	NODE_USES_PARSER    = true;
+	VISITOR             = true;
+
+	JAVA_UNICODE_ESCAPE = true;
+	UNICODE_INPUT       = true;
+
+//	USER_TOKEN_MANAGER  = true; // default option is false
+
+}
+
+PARSER_BEGIN(TextFormatCubeParser)
+
+package cn.bgotech.wormhole.olap.imp.text.parser;
+
+import java.io.StringReader;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import cn.bgotech.wormhole.olap.imp.text.RawCubeDataPackage;
+import cn.bgotech.wormhole.olap.imp.text.VectorLine;
+
+import cn.bgotech.wormhole.olap.exception.OlapException;
+
+//import cn.bgotech.prophet.bi.exception.BIException;
+
+//import cn.bgotech.prophet.bi.service.olap.importdata.text.ImportTextCubeDataBlank;
+//import cn.bgotech.prophet.bi.service.olap.importdata.text.MeasureDataLine4Import;
+
+public class TextFormatCubeParser {
+
+	private final Logger logger = LoggerFactory.getLogger(this.getClass());
+
+//	private SimpleNode root = null;
+
+	public static String peelShell(String s) {
+        s = s.trim();
+        return s.substring(1, s.length() - 1).trim();
+    }
+
+    public TextFormatCubeParser(String dataWrittenText) {
+        this(new StringReader(dataWrittenText));
+    }
+
+//	public ImportCubeDatasTextParser(String fileText) {
+//		this(new StringReader(fileText));
+//	}
+
+//	public SimpleNode getRoot() {
+//		return root;
+//	}
+
+}
+
+PARSER_END(TextFormatCubeParser)
+
+/* white space */
+SKIP: {
+	  " "
+	| "\t"
+	| "\n"
+	| "\r"
+	| "\f"
+}
+
+TOKEN: {
+		< # DIGIT : [ "0"-"9" ] >
+	|	< SIMPLE_NUMERIC : ( <DIGIT> )+ ( "." ( <DIGIT> )+ )? >
+	|	< DIMENSION : "[" ( ~[ "[", "]", "\n", "\r"] )+ "]" >
+	|	< PRE_DIMENSION : "![" ( ~[ "[", "]", "\n", "\r"] )+ "]?" >
+	|	< DIMENSION_ROLE : "##@@" ( ~[ "[", "]", "\n", "\r"] )+ "@@##" >
+	|	< MEASURE   : "{" ( ~[ "{", "}", "\n", "\r"] )+ "}" >
+	|	< MEMBER    : "(" ( ~[ "(", ")", "\n", "\r"] )+ ")" >
+	|	< VALUE     : "<" <SIMPLE_NUMERIC> ">" >
+}
+
+/* parser entry */
+RawCubeDataPackage parserEntry() throws OlapException:
+{
+    RawCubeDataPackage pkg = new RawCubeDataPackage();
+	Token t = null;
+	Token dimensionRoleTk = null;
+	VectorLine line = null;
+}
+{
+	(
+            t = <DIMENSION> dimensionRoleTk = <DIMENSION_ROLE>
+            {
+                pkg.addUniversalDimensionName(peelShell(t.image), peelShell(peelShell(peelShell(peelShell(dimensionRoleTk.image)))));
+            }
+        |
+            t = <PRE_DIMENSION> dimensionRoleTk = <DIMENSION_ROLE>
+            {
+                pkg.addUniversalDimensionName(peelShell(peelShell(t.image)), peelShell(peelShell(peelShell(peelShell(dimensionRoleTk.image)))), true);
+            }
+	)+
+	
+	( t = <MEASURE> { pkg.addMeasureMemberName(peelShell(t.image)); } )+
+	
+	(	{ line = new VectorLine(); }
+		( t = <MEMBER> { line.addUniversalMemberTrail(peelShell(t.image)); } )+
+		
+		( t = <VALUE> { line.addMeasureValue(peelShell(t.image)); } )+
+		{ pkg.addLine(line); }
+	)+
+	
+	<EOF>
+	{
+//		this.root = jjtThis;
+		return pkg;
+	}
+}
+
