@@ -1,0 +1,123 @@
+1. socket数据包结构
+	┌──────────────────────────────┬────────────────────────┬───────────────────────────────────────────┐
+	│ package bytes size (4 bytes) │ request code (4 bytes) │ data bytes (package bytes size - 8 bytes) │
+	└──────────────────────────────┴────────────────────────┴───────────────────────────────────────────┘
+
+2. 请求编码(request code)说明
+	[ 20 ] 新连接。socket创建后第一个数据包的类型。
+		data bytes
+			[ socket type (4 byte) ]
+		socket type
+			2001 实时响应的短连接
+			2002 上级节点向下分配任务的长连接
+			2003 下级节点返回执行结果的长连接
+
+	[ 4 ] 同步CUBE结构。非度量成员ID_PATH按对应的维度角色ID递增存储，度量成员按其ID递增存储，
+	其后进行度量值的insert、update、delete、query时，只接收已排列好的字节。
+		data bytes
+			[ cube MG_ID (4 bytes) ] [ dimension number (4 bytes) ]
+			( [ dimension MG_ID (4 bytes) ] [ dimension member max level (4 bytes) ] ) * [ dimension number ]
+			[ dimension role number (4 bytes) ]
+			( [ dimension Role MG_ID (4 bytes) ] [ dimension MG_ID (4 bytes) ] ) * [ dimension role number ]
+			[ measures number (4 bytes) ]
+			( [ Measure Member MG_ID (4 bytes) ] ) * [ measures number ]
+			( [ dimension role MG_id (4 bytes) ] [ amount of leaf members (4 bytes) ] ) * [ amount of dimension roles ]
+
+	[ 5 ] 插入CUBE的度量值。新建CUBE时已对存储结构进行有序处理，插入CUBE度量值必须传输排序好的字节数组。
+		data bytes
+			[ cube MG_ID (4 bytes) ]
+			( [ dimension member max level ] * [ member MG_ID (4 bytes) ] ) * [ dimension role number ]
+			( [ skip flag ( 1 byte ) ] [ measure value ( 8 bytes ) ] ) * [ measures number ]
+
+	[ 6 ] 更新CUBE的度量值。新建CUBE时已对存储结构进行有序处理，更新CUBE度量值必须传输排序好的字节数组。
+		data bytes
+			[ cube MG_ID (4 bytes) ]
+			( [ dimension member max level ] * [ member MG_ID (4 bytes) ] ) * [ dimension role number ]
+			( [ skip flag ( 1 byte ) ] [ measure value ( 8 bytes ) ] ) * [ measures number ]
+
+	[ 7 ] 删除CUBE的度量值。新建CUBE时已对存储结构进行有序处理，删除CUBE度量值必须传输排序好的字节数组。
+		data bytes
+			[ cube MG_ID (4 bytes) ]
+			( [ dimension member max level ] * [ member MG_ID (4 bytes) ] ) * [ dimension role number ]
+			( [ skip flag ( 1 byte ) ] ) * [ measures number ]
+
+
+	[ 9 ] 查询。默认对全部度量成员进行聚合计算，所以目前不显式指定度量成员。
+		data bytes
+			[ cube MG_ID (4 bytes) ] [ N (4 bytes) ] // 查询数量，N >= 1
+			// 64字节预留空间开始
+			[ random ID (8 bytes) ]
+			[ (56 bytes) ]
+			// 64字节预留空间结束
+			(
+				( [ dimension member max level ] * [ member MG_ID (4 bytes) ] ) * [ dimension roles quantity ]
+				// 成员MG_ID路径信息必须按维度角色MG_ID由小到大顺序排列。
+				// 当对（非度量维）root成员进行查询时，对应MG_ID部分值全部为0。
+			) * N
+
+		成功时返回数据包结构
+			[ package bytes size (4 bytes) ]
+			[ DPC__RET_AGG_DATA_S (4 bytes) ] // DPC_RET_AGG_DATA_S - data package code, return aggregate data success
+			[ random ID (8 bytes) ]
+			(
+				[ null flag (1 byte) ] // 空值标记：0 - 非空值，1 - 空值。
+				[ double value (8 bytes) ] // 汇总度量值
+			) * [ measure dimension leaf members quantity ] * N // N在请求包中定义
+
+		失败时返回数据包结构
+			[ package bytes size (4 bytes) ]
+			[ DPC__RET_AGG_DATA_F (4 bytes) ] // DPC_RET_AGG_DATA_F - data package code, return aggregate data failed
+			[ random ID (8 bytes) ]
+
+	[ 10 ] 将Cube数据从数据文件(cube_data_file_xxxx)中加载至内存，并进行整理。
+		data bytes
+			[ cube MG_ID (4 bytes) ]
+		response code
+			1 成功
+			0 未能重新构建
+			-1 程序出错
+
+	[ 12 ] 根据内存数据重构Cube数据文件(cube_data_file_xxxx)。
+		data bytes
+			[ cube_MG_ID (4 bytes) ]
+		response code
+			0 成功
+			其他 未成功
+
+	[ 21 ] 建立一个从master指向下级节点的用于分发任务的TCP长连接。
+		data bytes
+			[ subhost ip (16 bytes) ] [ subhost port (4 bytes) ]
+		response code
+			0 成功
+			其他 未成功
+
+	[ 22 ] 建立一个从下级节点指向master的用于返回任务结果的TCP长连接。
+		data bytes
+			[ master ip (16 bytes) ] [ master port (4 bytes) ]
+		response code
+			0 成功
+			其他 未成功
+
+
+
+1【服务端口操作类型编码说明】此编码为接收到的数据包头部开始的4个字节所代表的int值
+	请求编码
+		【0】客户端退出
+		【1】客户端测试
+		【3】停止服务
+	响应编码
+		【0】成功
+
+	是否已构建Cube
+		请求编码【8】
+		数据包结构
+			[ 8 (4 bytes) ] [ cube id (4 bytes) ]
+		响应编码【1】已构建【0】未构建【-1】程序出错
+
+
+
+
+	建立master到worker的socket长连接（只能作用于master节点）
+		请求编码【11】及数据包结构：
+			[ 11 (4 bytes) ] [ worker IP (32 bytes) ] [ worker port (4 bytes) ]
+		响应编码【1】成功【0】失败
